@@ -29,8 +29,6 @@ const uploadZoneEl   = $('uploadZone');
 const convertBtnEl   = $('convertBtn');
 const resultsSection = $('resultsSection');
 const resultsCont    = $('resultsContainer');
-const mergeCardEl    = $('mergeCard');
-const mergeDescEl    = $('mergeDesc');
 
 // ── Nav scroll shadow ──────────────────────────────────────────
 
@@ -166,25 +164,6 @@ function appendResultCard(res) {
   card.id = `result-card-${res.idx}`;
 }
 
-/**
- * Refreshes the merge card based on current successful results.
- * Called after each image so the merge option appears as soon as
- * 2+ images have succeeded.
- */
-function refreshMergeCard() {
-  const ok = results.filter(r => !r.error);
-  if (ok.length >= 2) {
-    const allCols = ok.map(r => r.extracted.columns.join('|'));
-    const same    = allCols.every(c => c === allCols[0]);
-    mergeDescEl.textContent = same
-      ? `All ${ok.length} tables share identical columns (${ok[0].extracted.columns.length} fields) — ideal for stacking into one file.`
-      : `${ok.length} tables with different schemas. Merging will union all columns and fill gaps with empty values.`;
-    mergeCardEl.classList.add('show');
-  } else {
-    mergeCardEl.classList.remove('show');
-  }
-}
-
 // ── Main pipeline ─────────────────────────────────────────────
 
 convertBtnEl.addEventListener('click', async () => {
@@ -195,7 +174,6 @@ convertBtnEl.addEventListener('click', async () => {
   // Show results section immediately — cards will stream in
   resultsCont.innerHTML = '';
   resultsSection.classList.add('show');
-  mergeCardEl.classList.remove('show');
   $('logLines').innerHTML = '';
   window._pq = {};
 
@@ -251,7 +229,9 @@ convertBtnEl.addEventListener('click', async () => {
 
         // Step 2 — Groq null imputation (if enabled and nulls exist)
         if (doImpute && nullCount > 0) {
-          log(`  Found ${nullCount} null(s) → sending to Groq…`, 'groq');
+          const batchCount = Math.ceil(nullCount / 20); // BATCH_SIZE = 20
+          const batchNote  = batchCount > 1 ? ` (${batchCount} batches of ≤20)` : '';
+          log(`  Found ${nullCount} null(s) → sending to Groq${batchNote}…`, 'groq');
           updateQueueItem(i, 'imputing');
           try {
             const impResult  = await imputeNullsWithGroq(extracted, groqKey);
@@ -294,7 +274,6 @@ convertBtnEl.addEventListener('click', async () => {
 
         // ── Render card immediately so the user can download now ──
         appendResultCard(res);
-        refreshMergeCard();
 
       } catch (err) {
         log(`  ✗ ${err.message}`, 'err');
@@ -344,8 +323,6 @@ convertBtnEl.addEventListener('click', async () => {
       );
     }
 
-    refreshMergeCard();
-
   } catch (err) {
     log('✗ Fatal: ' + err.message, 'err');
   } finally {
@@ -353,32 +330,4 @@ convertBtnEl.addEventListener('click', async () => {
     convertBtnEl.innerHTML = '▶ &nbsp; Extract Data &amp; Generate Parquet Files';
     updateConvertBtn();
   }
-});
-
-// ── Merge all results ─────────────────────────────────────────
-
-document.getElementById('mergeBtn').addEventListener('click', () => {
-  const ok = results.filter(r => !r.error);
-  if (ok.length < 2) return;
-
-  const allCols = []; const seen = new Set();
-  ok.forEach(r => r.extracted.columns.forEach(c => {
-    if (!seen.has(c)) { seen.add(c); allCols.push(c); }
-  }));
-
-  const mergedRows = [];
-  ok.forEach(r => r.extracted.rows.forEach(row => {
-    mergedRows.push(allCols.map(col => {
-      const ci = r.extracted.columns.indexOf(col);
-      return ci >= 0 ? row[ci] : null;
-    }));
-  }));
-
-  const bytes = writeParquet(allCols, mergedRows);
-  dlParquet(bytes, 'merged_output.parquet');
-  log(
-    `↓ merged_output.parquet — ${mergedRows.length} rows, ` +
-    `${allCols.length} cols, ${formatBytes(bytes.byteLength)}`,
-    'ok'
-  );
 });
