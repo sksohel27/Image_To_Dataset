@@ -4,589 +4,423 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>IMG → Parquet · Data Extraction Pipeline</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-  --bg: #07090d; --surface: #0e1219; --card: #131820;
-  --border: #1a2436; --accent: #00e5ff; --accent2: #7b61ff;
-  --green: #00ff88; --red: #ff4560; --yellow: #f5a623;
-  --text: #cdd6f4; --muted: #4a5a72; --muted2: #6a7d96;
-  --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
-}
-body { background: var(--bg); color: var(--text); font-family: var(--mono); min-height: 100vh; overflow-x: hidden; }
-body::before {
-  content: ''; position: fixed; inset: 0;
-  background-image: linear-gradient(rgba(26,36,54,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(26,36,54,.6) 1px, transparent 1px);
-  background-size: 48px 48px; pointer-events: none; z-index: 0;
-}
-body::after {
-  content: ''; position: fixed; inset: 0;
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0,229,255,.04) 0%, transparent 70%);
-  pointer-events: none; z-index: 0;
-}
-.wrapper { position: relative; z-index: 1; max-width: 1020px; margin: 0 auto; padding: 48px 24px 100px; }
-header { margin-bottom: 40px; }
-.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); border: 1px solid rgba(0,229,255,.3); padding: 4px 12px; border-radius: 2px; margin-bottom: 16px; }
-.badge::before { content: '◆'; font-size: 7px; }
-h1 { font-size: clamp(26px, 5vw, 46px); font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
-h1 span { color: var(--accent); }
-.subtitle { font-family: var(--sans); font-size: 14px; color: var(--muted2); margin-top: 10px; line-height: 1.65; }
-.subtitle strong { color: var(--text); font-weight: 500; }
 
-/* GUIDE */
-.guide-toggle { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 1px solid rgba(0,229,255,.2); border-radius: 6px; color: var(--accent); font-family: var(--mono); font-size: 12px; padding: 12px 16px; cursor: pointer; margin-bottom: 6px; transition: background .2s, border-color .2s; letter-spacing: .05em; }
-.guide-toggle:hover { background: rgba(0,229,255,.04); border-color: rgba(0,229,255,.5); }
-.guide-toggle .arrow { margin-left: auto; transition: transform .25s; font-size: 10px; }
-.guide-toggle.open .arrow { transform: rotate(90deg); }
-.guide-box { display: none; background: var(--card); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 28px; overflow: hidden; }
-.guide-box.open { display: block; }
-.guide-inner { padding: 24px 28px; }
-.guide-title { font-family: var(--sans); font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
-.steps { display: flex; flex-direction: column; }
-.step { display: flex; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border); }
-.step:last-child { border-bottom: none; }
-.step-num { width: 26px; height: 26px; border-radius: 50%; background: rgba(0,229,255,.12); border: 1px solid rgba(0,229,255,.3); color: var(--accent); font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
-.step-body { flex: 1; }
-.step-label { font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-.step-desc { font-family: var(--sans); font-size: 12px; color: var(--muted2); line-height: 1.6; }
-.step-desc a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted rgba(0,229,255,.4); }
-.step-desc a:hover { border-bottom-color: var(--accent); }
-.step-desc code { background: var(--surface); border: 1px solid var(--border); padding: 1px 6px; border-radius: 3px; font-size: 11px; color: var(--green); font-family: var(--mono); }
-.guide-tip { background: rgba(0,229,255,.06); border: 1px solid rgba(0,229,255,.15); border-radius: 6px; padding: 12px 16px; margin-top: 16px; font-family: var(--sans); font-size: 12px; color: var(--muted2); line-height: 1.6; }
-.guide-tip strong { color: var(--accent); }
+<!-- Fonts loaded first for FOUT prevention -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,700;1,400&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-/* API */
-.api-section { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 18px 22px; margin-bottom: 28px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.api-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-.api-input { flex: 1; min-width: 200px; background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 13px; padding: 9px 14px; border-radius: 4px; outline: none; transition: border-color .2s; }
-.api-input:focus { border-color: var(--accent); }
-.api-status { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.api-status.ok { color: var(--green); }
-
-/* UPLOAD */
-.upload-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 44px 24px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; margin-bottom: 20px; background: var(--card); }
-.upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(0,229,255,.04); }
-.upload-zone input { display: none; }
-.upload-icon { font-size: 36px; line-height: 1; margin-bottom: 12px; }
-.upload-title { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
-.upload-hint { font-size: 12px; color: var(--muted); }
-.upload-limit { display: inline-block; margin-top: 10px; font-size: 10px; letter-spacing: .1em; color: var(--accent); border: 1px solid rgba(0,229,255,.25); padding: 3px 10px; border-radius: 2px; }
-
-/* QUEUE */
-.queue-section { display: none; margin-bottom: 24px; }
-.queue-section.show { display: block; }
-.section-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-.section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-.queue-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 12px; }
-.queue-item { background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; position: relative; transition: border-color .2s; }
-.queue-item.done { border-color: rgba(0,255,136,.35); }
-.queue-item.error { border-color: rgba(255,69,96,.35); }
-.queue-item.processing { border-color: rgba(0,229,255,.5); }
-.queue-img { width: 100%; height: 110px; object-fit: cover; background: var(--surface); display: block; }
-.queue-name { font-size: 11px; padding: 7px 10px 3px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.queue-size { font-size: 10px; padding: 0 10px 7px; color: var(--muted); }
-.queue-status { font-size: 10px; padding: 6px 10px; border-top: 1px solid var(--border); }
-.queue-status.pending { color: var(--muted); }
-.queue-status.processing { color: var(--accent); }
-.queue-status.done { color: var(--green); }
-.queue-status.error { color: var(--red); }
-.queue-remove { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,.7); border: 1px solid var(--border); color: var(--muted); font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color .2s, border-color .2s; }
-.queue-remove:hover { color: var(--red); border-color: var(--red); }
-.queue-add { border: 2px dashed var(--border); border-radius: 6px; height: 172px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; cursor: pointer; color: var(--muted); font-size: 11px; transition: border-color .2s, color .2s; background: none; width: 100%; }
-.queue-add:hover { border-color: var(--accent); color: var(--accent); }
-
-/* CONVERT */
-.convert-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, var(--accent2), var(--accent)); border: none; border-radius: 6px; color: #000; font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: .05em; cursor: pointer; transition: opacity .2s, transform .1s; margin-bottom: 28px; }
-.convert-btn:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
-.convert-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
-
-/* LOG */
-.log-box { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 28px; display: none; }
-.log-box.show { display: block; }
-.log-header { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
-.log-dots { display: flex; gap: 5px; }
-.log-dots span { width: 10px; height: 10px; border-radius: 50%; }
-.log-dots span:nth-child(1) { background: #ff5f57; }
-.log-dots span:nth-child(2) { background: #febc2e; }
-.log-dots span:nth-child(3) { background: #28c840; }
-.log-lines { padding: 16px; max-height: 220px; overflow-y: auto; font-size: 12px; line-height: 1.8; }
-.log-line { display: flex; gap: 10px; }
-.log-ts { color: var(--muted); flex-shrink: 0; }
-.log-msg.info { color: var(--text); } .log-msg.ok { color: var(--green); }
-.log-msg.err { color: var(--red); } .log-msg.warn { color: var(--yellow); } .log-msg.accent { color: var(--accent); }
-
-/* RESULTS */
-.results-section { display: none; margin-bottom: 28px; }
-.results-section.show { display: block; }
-.result-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
-.result-card-header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; background: var(--surface); border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }
-.result-card-header:hover { background: rgba(255,255,255,.02); }
-.result-img-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); flex-shrink: 0; }
-.result-card-title { font-size: 13px; font-weight: 500; color: var(--text); }
-.result-card-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
-.result-card-badge { font-size: 10px; padding: 3px 8px; border-radius: 2px; letter-spacing: .06em; white-space: nowrap; }
-.result-card-badge.ok { background: rgba(0,255,136,.1); color: var(--green); border: 1px solid rgba(0,255,136,.2); }
-.result-card-badge.err { background: rgba(255,69,96,.1); color: var(--red); border: 1px solid rgba(255,69,96,.2); }
-.result-chevron { color: var(--muted); font-size: 11px; transition: transform .2s; flex-shrink: 0; }
-.result-card.open .result-chevron { transform: rotate(90deg); }
-.result-body { display: none; padding: 18px; }
-.result-card.open .result-body { display: block; }
-
-/* STATS */
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-bottom: 20px; }
-.stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 12px 14px; }
-.stat-label { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
-.stat-value { font-size: 22px; font-weight: 600; color: var(--accent); line-height: 1; }
-.stat-unit { font-size: 10px; color: var(--muted2); margin-top: 3px; }
-
-/* COLUMN TABLE */
-.sub-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
-.col-table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; margin-bottom: 20px; }
-.col-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
-.col-table thead th { background: var(--card); padding: 9px 14px; text-align: left; font-weight: 500; color: var(--accent2); border-bottom: 1px solid var(--border); letter-spacing: .04em; font-size: 11px; }
-.col-table tbody tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
-.col-table tbody td { padding: 8px 14px; color: var(--text); }
-.col-table tbody tr:hover td { background: rgba(255,255,255,.02); }
-.type-badge { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 2px; font-weight: 500; }
-.type-badge.number { background: rgba(0,229,255,.1); color: var(--accent); border: 1px solid rgba(0,229,255,.2); }
-.type-badge.string { background: rgba(123,97,255,.1); color: var(--accent2); border: 1px solid rgba(123,97,255,.2); }
-
-/* PREVIEW TABLE */
-.preview-table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; margin-bottom: 18px; max-height: 260px; overflow-y: auto; }
-.preview-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
-.preview-table thead th { background: var(--card); padding: 9px 14px; text-align: left; font-weight: 500; color: var(--accent); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; }
-.preview-table tbody tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
-.preview-table tbody td { padding: 8px 14px; color: var(--text); }
-.preview-table tbody tr:hover td { background: rgba(255,255,255,.02); }
-
-/* DOWNLOAD */
-.dl-btn { display: inline-flex; align-items: center; gap: 8px; background: var(--green); border: none; border-radius: 5px; color: #000; font-family: var(--mono); font-size: 13px; font-weight: 600; padding: 11px 22px; cursor: pointer; transition: opacity .2s; }
-.dl-btn:hover { opacity: .85; }
-
-/* MERGE */
-.merge-card { background: var(--card); border: 1px solid rgba(0,229,255,.25); border-radius: 8px; padding: 20px 22px; display: none; margin-bottom: 28px; }
-.merge-card.show { display: block; }
-.merge-title { font-size: 13px; font-weight: 500; color: var(--accent); margin-bottom: 6px; }
-.merge-desc { font-family: var(--sans); font-size: 12px; color: var(--muted2); margin-bottom: 14px; line-height: 1.6; }
-.merge-btn { display: inline-flex; align-items: center; gap: 8px; background: rgba(0,229,255,.12); border: 1px solid rgba(0,229,255,.35); color: var(--accent); font-family: var(--mono); font-size: 12px; font-weight: 500; padding: 10px 20px; border-radius: 5px; cursor: pointer; transition: background .2s; }
-.merge-btn:hover { background: rgba(0,229,255,.2); }
-
-@keyframes spin { to { transform: rotate(360deg); } }
-.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(0,0,0,.3); border-top-color: #000; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--surface); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
-</style>
+<!-- Stylesheets — ordered: base → components → pipeline -->
+<link rel="stylesheet" href="css/base.css"/>
+<link rel="stylesheet" href="css/nav.css"/>
+<link rel="stylesheet" href="css/forms.css"/>
+<link rel="stylesheet" href="css/pipeline.css"/>
 </head>
 <body>
-<div class="wrapper">
 
-  <header>
-    <div class="badge">Data Extraction Pipeline</div>
-    <h1>Image <span>→</span> Parquet</h1>
-    <p class="subtitle">
-      Upload up to <strong>5 images</strong> containing tables, charts, or spreadsheet screenshots.<br/>
-      Gemini Flash extracts structured data and generates <strong>.parquet</strong> files —
-      <em>free-tier Flash models only · no credit card required.</em>
-    </p>
-  </header>
+<div class="page-wrapper">
 
-  <!-- GUIDE -->
-  <button class="guide-toggle" id="guideToggle">
-    📖 &nbsp; How to get a FREE Gemini API Key — beginner-friendly step-by-step guide
-    <span class="arrow">▶</span>
-  </button>
-  <div class="guide-box" id="guideBox">
-    <div class="guide-inner">
-      <div class="guide-title">🔑 Getting Your Free Gemini API Key</div>
-      <div class="steps">
-        <div class="step">
-          <div class="step-num">1</div>
-          <div class="step-body">
-            <div class="step-label">Open Google AI Studio in your browser</div>
-            <div class="step-desc">Visit <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a> — this is Google's free platform for AI. No signup for the platform is required, just a Google account.</div>
+  <!-- ═══════════════════════════════════════════════════════
+       NAV
+  ════════════════════════════════════════════════════════ -->
+  <nav class="site-nav" role="navigation">
+    <div class="nav-inner">
+
+      <div class="nav-logo">
+        <span class="nav-logo-main">IMG → Parquet</span>
+        <span class="nav-logo-sub">Data Extraction Pipeline</span>
+      </div>
+
+      <div class="nav-pipeline" aria-label="Pipeline steps">
+        <div class="nav-pipeline-step">
+          <span class="nav-pipeline-dot active"></span>
+          <span>Upload</span>
+        </div>
+        <span class="nav-pipeline-sep">→</span>
+        <div class="nav-pipeline-step">
+          <span class="nav-pipeline-dot"></span>
+          <span>Extract</span>
+        </div>
+        <span class="nav-pipeline-sep">→</span>
+        <div class="nav-pipeline-step">
+          <span class="nav-pipeline-dot"></span>
+          <span>Impute</span>
+        </div>
+        <span class="nav-pipeline-sep">→</span>
+        <div class="nav-pipeline-step">
+          <span class="nav-pipeline-dot"></span>
+          <span>Parquet</span>
+        </div>
+      </div>
+
+    </div>
+  </nav>
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       HERO
+  ════════════════════════════════════════════════════════ -->
+  <section class="hero" aria-label="Hero">
+    <div class="container">
+      <div class="hero-inner">
+
+        <div class="hero-headline fade-up">
+          <div class="eyebrow">Intelligent data extraction</div>
+          <h1>Image <em>into</em><br/>structured data.</h1>
+          <p>
+            Upload table screenshots, charts, or spreadsheet images.
+            Gemini Flash reads the data — Groq fills in the gaps —
+            and you download a clean <strong>.parquet</strong> file.
+          </p>
+        </div>
+
+        <div class="hero-stats fade-up fade-up-2" aria-label="Pipeline stats">
+          <div class="hero-stat">
+            <div class="hero-stat-num">5</div>
+            <div class="hero-stat-label">Images per run</div>
+          </div>
+          <div class="hero-stat" style="margin-top:var(--space-md)">
+            <div class="hero-stat-num">2</div>
+            <div class="hero-stat-label">AI models</div>
+          </div>
+          <div class="hero-stat" style="margin-top:var(--space-md)">
+            <div class="hero-stat-num">0</div>
+            <div class="hero-stat-label">Cost required</div>
           </div>
         </div>
-        <div class="step">
-          <div class="step-num">2</div>
-          <div class="step-body">
-            <div class="step-label">Sign in with any Google / Gmail account</div>
-            <div class="step-desc">Click the <strong>Sign in</strong> button and log in with your Gmail. Don't have one? <a href="https://accounts.google.com/signup" target="_blank">Create a free Google account here</a>. It takes 2 minutes and requires no credit card.</div>
+
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       MAIN CONTENT
+  ════════════════════════════════════════════════════════ -->
+  <main id="main">
+    <div class="container section">
+
+
+      <!-- ─────────────────────────────────────────────────
+           1. GEMINI SETUP
+      ────────────────────────────────────────────────── -->
+      <div class="eyebrow">Step 1 — Image Extraction</div>
+
+      <div class="config-section" id="geminiSection">
+        <div class="config-section-header" id="geminiHeader">
+          <div class="config-section-header-left">
+            <span class="config-section-title">Gemini Flash API Key</span>
+            <span class="config-section-subtitle">
+              Free · No credit card required · Used for image-to-data extraction
+            </span>
           </div>
+          <span class="config-section-chevron">▶</span>
         </div>
-        <div class="step">
-          <div class="step-num">3</div>
-          <div class="step-body">
-            <div class="step-label">Click "Create API key"</div>
-            <div class="step-desc">You'll see a blue <strong>"Create API key"</strong> button. Click it, then choose <strong>"Create API key in new project"</strong> from the dropdown. Google will generate your key instantly — it looks like <code>AIzaSyABC123xyzDEF456...</code></div>
+
+        <div class="config-section-body" id="geminiBody">
+          <!-- Guide steps -->
+          <div class="guide-steps">
+            <div class="guide-step">
+              <div class="guide-step-num">1</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Open Google AI Studio</div>
+                <div class="guide-step-desc">
+                  Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com/app/apikey</a> — Google's free AI developer platform. Only a Google account is required.
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num">2</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Sign in with Gmail</div>
+                <div class="guide-step-desc">
+                  Log in with any Google account. Don't have one?
+                  <a href="https://accounts.google.com/signup" target="_blank" rel="noopener">Create one free here</a> — takes 2 minutes, no payment needed.
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num">3</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Click "Create API key"</div>
+                <div class="guide-step-desc">
+                  Hit the blue <strong>Create API key</strong> button, then choose <strong>Create API key in new project</strong>. Your key looks like <code>AIzaSyABC123...</code>
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num">4</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Paste your key below</div>
+                <div class="guide-step-desc">
+                  Copy the key and paste it into the field. The tool auto-picks the newest free Flash model — fast, accurate, and well-suited for table and chart OCR.
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="step">
-          <div class="step-num">4</div>
-          <div class="step-body">
-            <div class="step-label">Copy and paste your key below</div>
-            <div class="step-desc">Click the copy icon next to your key, then paste it into the <strong>Gemini API Key</strong> field below. The status dot will turn <span style="color:var(--green)">green</span> when the key format is recognised. That's it — you're ready!</div>
+
+          <div class="guide-tip">
+            <strong>Privacy:</strong> Your key is never stored. It's sent only to Google's servers directly from your browser. Treat it like a password.
           </div>
-        </div>
-        <div class="step">
-          <div class="step-num">5</div>
-          <div class="step-body">
-            <div class="step-label">Free limits &amp; what models are used</div>
-            <div class="step-desc">The free tier supports <strong>Gemini Flash</strong> models (1.5-flash, 2.0-flash, 2.5-flash etc.). This tool auto-picks the newest Flash model available on your key — fast, accurate vision extraction, totally free. Flash is well-suited for table and chart OCR.</div>
+
+          <!-- API key input -->
+          <div style="margin-top: var(--space-lg);">
+            <div class="api-key-row">
+              <span class="api-key-label">Gemini Key</span>
+              <input
+                type="password"
+                class="api-key-input"
+                id="apiKey"
+                placeholder="AIzaSy…"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <span class="api-key-status" id="apiStatus">
+                Not set · <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--rust)">Get free key ↗</a>
+              </span>
+            </div>
           </div>
         </div>
       </div>
-      <div class="guide-tip">
-        <strong>💡 Privacy note:</strong> Your API key is never stored or sent anywhere except directly to Google's servers. This tool runs 100% in your browser. Treat your key like a password — never post it in public places or upload it to GitHub.
+
+
+      <!-- ─────────────────────────────────────────────────
+           2. GROQ SETUP
+      ────────────────────────────────────────────────── -->
+      <div class="eyebrow" style="margin-top:var(--space-lg)">Step 2 — AI Null Imputation (optional)</div>
+
+      <div class="config-section">
+        <div class="config-section-header" id="groqHeader">
+          <div class="config-section-header-left">
+            <span class="config-section-title">Groq API Key</span>
+            <span class="config-section-subtitle">
+              Free · Ultra-fast inference · Used to intelligently fill missing values
+            </span>
+          </div>
+          <span class="config-section-chevron">▶</span>
+        </div>
+
+        <div class="config-section-body" id="groqBody">
+          <!-- Explanation banner -->
+          <div class="notes-banner" style="margin-bottom:var(--space-md)">
+            After Gemini extracts your data, Groq analyzes null cells and fills them using
+            <strong>median/mean for numbers</strong>, <strong>mode for categories</strong>,
+            <strong>interpolation for sequences</strong>, and <strong>cross-column inference</strong> —
+            each with a method label, confidence score, and one-sentence reason.
+            Images are never sent to Groq — only column names and values.
+          </div>
+
+          <!-- Guide steps -->
+          <div class="guide-steps">
+            <div class="guide-step">
+              <div class="guide-step-num rust-num">1</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Go to Groq Console</div>
+                <div class="guide-step-desc">
+                  Visit <a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a> — completely free, no payment method needed.
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num rust-num">2</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Create a free account</div>
+                <div class="guide-step-desc">
+                  Click <strong>Sign Up</strong> — you can use Google, GitHub, or email. The free tier is generous with no credit card required.
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num rust-num">3</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Navigate to API Keys</div>
+                <div class="guide-step-desc">
+                  Click <strong>API Keys</strong> in the left sidebar, or go directly to
+                  <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>.
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num rust-num">4</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Create a new API key</div>
+                <div class="guide-step-desc">
+                  Click <strong>Create API Key</strong>, give it a name (e.g. <em>parquet-tool</em>), then <strong>Submit</strong>.
+                  Your key starts with <code>gsk_…</code> — copy it immediately, it won't be shown again.
+                </div>
+              </div>
+            </div>
+            <div class="guide-step">
+              <div class="guide-step-num rust-num">5</div>
+              <div class="guide-step-body">
+                <div class="guide-step-label">Paste & enable the toggle</div>
+                <div class="guide-step-desc">
+                  Paste the key below, then flip the <strong>AI Null Imputation</strong> toggle on.
+                  This tool uses <code>llama-3.3-70b-versatile</code> — Groq's free-tier flagship.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- API key input -->
+          <div style="margin-top:var(--space-lg)">
+            <div class="api-key-row">
+              <span class="api-key-label">Groq Key</span>
+              <input
+                type="password"
+                class="api-key-input"
+                id="groqKey"
+                placeholder="gsk_…"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <span class="api-key-status" id="groqStatus">
+                Not set · <a href="https://console.groq.com/keys" target="_blank" style="color:var(--rust)">Get free key ↗</a>
+              </span>
+            </div>
+          </div>
+
+          <!-- Imputation toggle -->
+          <div class="impute-row" style="margin-top:var(--space-md)">
+            <div class="impute-text">
+              <div class="impute-title">
+                AI Null Imputation
+                <span class="impute-badge">Groq · llama-3.3-70b</span>
+              </div>
+              <div class="impute-desc">
+                Automatically fill missing values after extraction using statistical analysis and contextual inference.
+              </div>
+            </div>
+            <span id="groqRequiredNote" style="font-family:var(--font-mono);font-size:11px;color:var(--stone);white-space:nowrap">
+              Requires Groq key ↑
+            </span>
+            <label class="toggle-switch" aria-label="Enable AI null imputation">
+              <input type="checkbox" id="imputeToggle" disabled/>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+        </div>
+      </div>
+
+
+      <!-- ─────────────────────────────────────────────────
+           3. UPLOAD
+      ────────────────────────────────────────────────── -->
+      <div class="eyebrow" style="margin-top:var(--space-xl)">Step 3 — Upload Images</div>
+      <h2 style="margin-bottom:var(--space-md);font-size:clamp(22px,3vw,38px)">
+        Drop your images here.
+      </h2>
+
+      <div class="upload-zone" id="uploadZone" role="button" aria-label="Upload images" tabindex="0">
+        <input type="file" id="fileInput" accept="image/*" multiple aria-hidden="true"/>
+        <div class="upload-icon">↑</div>
+        <div class="upload-heading">Drag &amp; drop or click to browse</div>
+        <p class="upload-hint">PNG · JPG · WEBP · GIF &nbsp;·&nbsp; Tables, charts, spreadsheet screenshots</p>
+        <span class="upload-tag">Up to 5 images per run</span>
+      </div>
+
+
+      <!-- ─────────────────────────────────────────────────
+           4. QUEUE
+      ────────────────────────────────────────────────── -->
+      <div class="queue-section" id="queueSection">
+        <div class="queue-header">
+          <div class="queue-title">Queued Images</div>
+          <span class="queue-count" id="queueCount">0 / 5</span>
+        </div>
+        <div class="queue-grid" id="queueGrid"></div>
+      </div>
+
+
+      <!-- ─────────────────────────────────────────────────
+           5. CONVERT BUTTON
+      ────────────────────────────────────────────────── -->
+      <button class="btn btn-primary" id="convertBtn" disabled aria-label="Start extraction">
+        ▶ &nbsp; Extract Data &amp; Generate Parquet Files
+      </button>
+
+
+      <!-- ─────────────────────────────────────────────────
+           6. LOG CONSOLE
+      ────────────────────────────────────────────────── -->
+      <div class="log-box" id="logBox" role="log" aria-label="Pipeline log" aria-live="polite">
+        <div class="log-titlebar">
+          <div class="log-dots">
+            <span></span><span></span><span></span>
+          </div>
+          <span class="log-titlebar-name">pipeline.log</span>
+        </div>
+        <div class="log-body" id="logLines"></div>
+      </div>
+
+
+      <!-- ─────────────────────────────────────────────────
+           7. RESULTS
+      ────────────────────────────────────────────────── -->
+      <div class="results-section" id="resultsSection">
+        <div class="results-heading">
+          <h2>Results</h2>
+        </div>
+        <div id="resultsContainer"></div>
+      </div>
+
+
+      <!-- ─────────────────────────────────────────────────
+           8. MERGE
+      ────────────────────────────────────────────────── -->
+      <div class="merge-card" id="mergeCard">
+        <div class="eyebrow rust">Combine outputs</div>
+        <div class="merge-title">Merge all results into one file.</div>
+        <p class="merge-desc" id="mergeDesc">
+          Combine all successfully extracted tables into a single .parquet file.
+        </p>
+        <button class="btn btn-rust" id="mergeBtn">
+          ↓ &nbsp; Download Merged Parquet
+        </button>
+      </div>
+
+
+    </div><!-- /container -->
+  </main>
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       FOOTER
+  ════════════════════════════════════════════════════════ -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-inner">
+        <span class="footer-copy">
+          IMG → Parquet Pipeline · Runs entirely in your browser · No data is stored
+        </span>
+        <div class="footer-stack">
+          <div class="footer-stack-item">
+            <span class="footer-stack-dot gemini"></span>
+            Gemini Flash
+          </div>
+          <div class="footer-stack-item">
+            <span class="footer-stack-dot groq"></span>
+            Groq llama-3.3
+          </div>
+          <div class="footer-stack-item">
+            <span class="footer-stack-dot parq"></span>
+            Apache Parquet
+          </div>
+        </div>
       </div>
     </div>
-  </div>
+  </footer>
 
-  <!-- API KEY -->
-  <div class="api-section">
-    <span class="api-label">Gemini API Key</span>
-    <input type="password" class="api-input" id="apiKey" placeholder="Paste your key here → AIzaSy..."/>
-    <span class="api-status" id="apiStatus">Not set &nbsp;·&nbsp; <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);text-decoration:none;">Get free key ↗</a></span>
-  </div>
+</div><!-- /page-wrapper -->
 
-  <!-- UPLOAD -->
-  <div class="upload-zone" id="uploadZone">
-    <input type="file" id="fileInput" accept="image/*" multiple/>
-    <div class="upload-icon">🖼️</div>
-    <div class="upload-title">Drop images here or click to browse</div>
-    <div class="upload-hint">PNG · JPG · WEBP · GIF &nbsp;|&nbsp; Tables, charts, spreadsheet screenshots</div>
-    <span class="upload-limit">UP TO 5 IMAGES AT ONCE</span>
-  </div>
 
-  <!-- QUEUE -->
-  <div class="queue-section" id="queueSection">
-    <div class="section-label">Images Queued &nbsp;<span id="queueCount" style="color:var(--accent)">0 / 5</span></div>
-    <div class="queue-grid" id="queueGrid"></div>
-  </div>
+<!-- ── Scripts (load order matters) ────────────────────────── -->
+<script src="js/parquet.js"></script>
+<script src="js/gemini.js"></script>
+<script src="js/groq.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/app.js"></script>
 
-  <!-- CONVERT -->
-  <button class="convert-btn" id="convertBtn" disabled>
-    ▶ &nbsp; Extract Data &amp; Generate Parquet Files
-  </button>
-
-  <!-- LOG -->
-  <div class="log-box" id="logBox">
-    <div class="log-header">
-      <div class="log-dots"><span></span><span></span><span></span></div>
-      <span>pipeline.log</span>
-    </div>
-    <div class="log-lines" id="logLines"></div>
-  </div>
-
-  <!-- RESULTS -->
-  <div class="results-section" id="resultsSection">
-    <div class="section-label">Extraction Results</div>
-    <div id="resultsContainer"></div>
-  </div>
-
-  <!-- MERGE -->
-  <div class="merge-card" id="mergeCard">
-    <div class="merge-title">⚡ Merge All Results into One File</div>
-    <div class="merge-desc" id="mergeDesc">Combine all successfully extracted tables into a single .parquet file.</div>
-    <button class="merge-btn" id="mergeBtn">⬇ Download Merged Parquet</button>
-  </div>
-
-</div>
-<script>
-// ── Parquet writer ─────────────────────────────────────────────
-function writeParquet(columns, rows) {
-  const te = new TextEncoder(), PAR1 = new Uint8Array([80,65,82,49]), N = rows.length;
-  const isDouble = columns.map((_,ci) => rows.every(r => r[ci]==null || typeof r[ci]==='number'));
-  function varint(b,n){while(n>127){b.push((n&0x7f)|0x80);n=Math.floor(n/128);}b.push(n&0x7f);}
-  function zz(b,n){varint(b,n>=0?n*2:-2*n-1);}
-  function fh(b,prev,id,t){const d=id-prev;if(d>=1&&d<=15)b.push((d<<4)|t);else{b.push(t);zz(b,id);}}
-  const fi32=(b,p,id,v)=>{fh(b,p,id,5);zz(b,v);return id;};
-  const fi64=(b,p,id,v)=>{fh(b,p,id,6);zz(b,v);return id;};
-  const fstr=(b,p,id,v)=>{const by=te.encode(v);fh(b,p,id,8);varint(b,by.length);for(const x of by)b.push(x);return id;};
-  const flst=(b,p,id,et,sz)=>{fh(b,p,id,9);if(sz<15)b.push((sz<<4)|et);else{b.push(0xf0|et);varint(b,sz);}return id;};
-  const fstct=(b,p,id)=>{fh(b,p,id,12);return id;};
-  const stop=b=>b.push(0);
-  const pageDatas=columns.map((_,ci)=>{
-    const b=[];
-    if(isDouble[ci]){const ab=new ArrayBuffer(8*N);const dv=new DataView(ab);rows.forEach((r,i)=>dv.setFloat64(i*8,r[ci]==null?0:+r[ci],true));for(const x of new Uint8Array(ab))b.push(x);}
-    else{rows.forEach(r=>{const by=te.encode(r[ci]==null?'':String(r[ci]));b.push(by.length&0xff,(by.length>>8)&0xff,(by.length>>16)&0xff,(by.length>>24)&0xff);for(const x of by)b.push(x);});}
-    return new Uint8Array(b);
-  });
-  const pageHdrs=pageDatas.map(d=>{const b=[];let p=0;p=fi32(b,p,1,0);p=fi32(b,p,2,d.byteLength);p=fi32(b,p,3,d.byteLength);p=fstct(b,p,5);let dp=0;dp=fi32(b,dp,1,N);dp=fi32(b,dp,2,0);dp=fi32(b,dp,3,3);dp=fi32(b,dp,4,3);stop(b);stop(b);return new Uint8Array(b);});
-  const chunks=columns.map((_,ci)=>{const h=pageHdrs[ci],d=pageDatas[ci];const c=new Uint8Array(h.byteLength+d.byteLength);c.set(h);c.set(d,h.byteLength);return c;});
-  let off=4;const offsets=chunks.map(c=>{const o=off;off+=c.byteLength;return o;});const totalData=off-4;
-  const fb=[];let fp=0;fp=fi32(fb,fp,1,2);fp=flst(fb,fp,2,12,columns.length+1);
-  {let sp=0;sp=fstr(fb,sp,4,'schema');sp=fi32(fb,sp,5,columns.length);stop(fb);}
-  columns.forEach((col,ci)=>{let sp=0;sp=fi32(fb,sp,1,isDouble[ci]?5:6);sp=fi32(fb,sp,3,0);sp=fstr(fb,sp,4,col);stop(fb);});
-  fp=fi64(fb,fp,3,N);fp=flst(fb,fp,4,12,1);
-  {let rp=0;rp=flst(fb,rp,1,12,columns.length);
-  columns.forEach((col,ci)=>{let cp=0;cp=fi64(fb,cp,2,offsets[ci]);cp=fstct(fb,cp,3);
-  {let mp=0;mp=fi32(fb,mp,1,isDouble[ci]?5:6);mp=flst(fb,mp,2,5,1);zz(fb,0);mp=flst(fb,mp,3,8,1);const cb=te.encode(col);varint(fb,cb.length);for(const x of cb)fb.push(x);mp=fi32(fb,mp,4,0);mp=fi64(fb,mp,5,N);mp=fi64(fb,mp,6,chunks[ci].byteLength);mp=fi64(fb,mp,7,chunks[ci].byteLength);mp=fi64(fb,mp,9,offsets[ci]);stop(fb);}stop(fb);});
-  rp=fi64(fb,rp,2,totalData);rp=fi64(fb,rp,3,N);stop(fb);}stop(fb);
-  const footer=new Uint8Array(fb);const flen=new Uint8Array(4);new DataView(flen.buffer).setInt32(0,footer.byteLength,true);
-  const parts=[PAR1,...chunks,footer,flen,PAR1];const total=parts.reduce((a,p)=>a+p.byteLength,0);
-  const out=new Uint8Array(total);let pos=0;for(const p of parts){out.set(p,pos);pos+=p.byteLength;}return out;
-}
-
-// ── Model picker ──────────────────────────────────────────────
-const FLASH_RANK=['gemini-3.1-flash','gemini-3-flash','gemini-2.5-flash','gemini-2.0-flash','gemini-1.5-flash'];
-const SKIP_RE=/embed|tts|aqa|imagen|veo|lyria|live|audio|robotics|computer.use|customtools/i;
-async function pickBestFreeModel(apiKey){
-  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=200`);
-  if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error('ListModels: '+(e?.error?.message||r.statusText));}
-  const data=await r.json();
-  const cands=(data.models||[]).filter(m=>{
-    const n=(m.name||'').replace('models/','').toLowerCase();
-    if(SKIP_RE.test(n))return false;
-    if(/\bpro\b/.test(n))return false;
-    return (m.supportedGenerationMethods||[]).includes('generateContent');
-  });
-  if(!cands.length)throw new Error('No free Flash model found. Verify your key at aistudio.google.com');
-  function score(name){const n=name.toLowerCase();for(let i=0;i<FLASH_RANK.length;i++)if(n.startsWith(FLASH_RANK[i]))return i;return FLASH_RANK.length;}
-  cands.sort((a,b)=>{const na=a.name.replace('models/',''),nb=b.name.replace('models/','');const sa=score(na),sb=score(nb);if(sa!==sb)return sa-sb;const al=na.includes('lite')?1:0,bl=nb.includes('lite')?1:0;if(al!==bl)return al-bl;return nb.localeCompare(na);});
-  return cands[0].name.replace('models/','');
-}
-
-// ── Helpers ───────────────────────────────────────────────────
-function formatBytes(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';return(b/1048576).toFixed(2)+' MB';}
-function colStats(rows,ci,isNum){
-  const vals=rows.map(r=>r[ci]).filter(v=>v!=null&&v!=='');
-  if(!vals.length)return{nulls:rows.length,unique:0,min:'—',max:'—'};
-  const nulls=rows.length-vals.length,unique=new Set(vals.map(String)).size;
-  if(isNum){const nums=vals.map(Number).filter(n=>!isNaN(n));return{nulls,unique,min:Math.min(...nums).toLocaleString(),max:Math.max(...nums).toLocaleString()};}
-  const sorted=[...vals].sort((a,b)=>String(a).localeCompare(String(b)));
-  return{nulls,unique,min:String(sorted[0]).substring(0,22),max:String(sorted[sorted.length-1]).substring(0,22)};
-}
-function dlParquet(bytes,filename){
-  const blob=new Blob([bytes],{type:'application/octet-stream'});const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
-}
-window._pq={};
-
-// ── State ─────────────────────────────────────────────────────
-let imageFiles=[], results=[], cachedModel=null;
-const $=id=>document.getElementById(id);
-const apiKeyEl=$('apiKey'),apiStatus=$('apiStatus'),guideToggle=$('guideToggle'),guideBox=$('guideBox');
-const uploadZone=$('uploadZone'),fileInput=$('fileInput'),queueSection=$('queueSection'),queueGrid=$('queueGrid'),queueCount=$('queueCount');
-const convertBtn=$('convertBtn'),logBox=$('logBox'),logLines=$('logLines');
-const resultsSection=$('resultsSection'),resultsContainer=$('resultsContainer');
-const mergeCard=$('mergeCard'),mergeDesc=$('mergeDesc'),mergeBtn=$('mergeBtn');
-
-// Guide
-guideToggle.addEventListener('click',()=>{const o=guideBox.classList.toggle('open');guideToggle.classList.toggle('open',o);});
-
-// API key
-apiKeyEl.addEventListener('input',()=>{
-  const v=apiKeyEl.value.trim();
-  if(v.startsWith('AIza')&&v.length>20){apiStatus.innerHTML='● Key valid — ready';apiStatus.className='api-status ok';}
-  else{apiStatus.innerHTML='Not set &nbsp;·&nbsp; <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);text-decoration:none;">Get free key ↗</a>';apiStatus.className='api-status';}
-  updateBtn();
-});
-
-// Upload
-uploadZone.addEventListener('click',()=>fileInput.click());
-uploadZone.addEventListener('dragover',e=>{e.preventDefault();uploadZone.classList.add('dragover');});
-uploadZone.addEventListener('dragleave',()=>uploadZone.classList.remove('dragover'));
-uploadZone.addEventListener('drop',e=>{e.preventDefault();uploadZone.classList.remove('dragover');addFiles([...e.dataTransfer.files]);});
-fileInput.addEventListener('change',()=>{addFiles([...fileInput.files]);fileInput.value='';});
-
-function addFiles(files){
-  const allowed=files.filter(f=>f.type.startsWith('image/'));
-  const slots=5-imageFiles.length;
-  if(slots<=0){log('Max 5 images reached. Remove one to add more.','warn');return;}
-  allowed.slice(0,slots).forEach(f=>{
-    const reader=new FileReader();
-    reader.onload=e=>{imageFiles.push({file:f,b64:e.target.result.split(',')[1],dataURL:e.target.result});renderQueue();updateBtn();};
-    reader.readAsDataURL(f);
-  });
-  if(allowed.length>slots)log(`Only ${slots} slot(s) available — added first ${slots}.`,'warn');
-}
-
-window.removeFile=function(idx){imageFiles.splice(idx,1);renderQueue();updateBtn();};
-
-function renderQueue(){
-  queueGrid.innerHTML='';
-  queueCount.textContent=`${imageFiles.length} / 5`;
-  if(!imageFiles.length){queueSection.classList.remove('show');return;}
-  queueSection.classList.add('show');
-  imageFiles.forEach((item,i)=>{
-    const res=results.find(r=>r.idx===i);
-    const sc=res?(res.error?'error':'done'):'pending';
-    const st=res?(res.error?'✗ Error':'✓ Done'):'⏳ Pending';
-    const div=document.createElement('div');
-    div.className=`queue-item ${sc}`;div.id=`qi-${i}`;
-    div.innerHTML=`<img class="queue-img" src="${item.dataURL}" alt=""/><div class="queue-name">${item.file.name}</div><div class="queue-size">${formatBytes(item.file.size)}</div><div class="queue-status ${sc}">${st}</div><button class="queue-remove" onclick="removeFile(${i})">✕</button>`;
-    queueGrid.appendChild(div);
-  });
-  if(imageFiles.length<5){
-    const add=document.createElement('button');add.className='queue-add';
-    add.innerHTML='<span style="font-size:22px">＋</span><span style="font-size:11px">Add image</span>';
-    add.onclick=()=>fileInput.click();queueGrid.appendChild(add);
-  }
-}
-
-function updateQueueItem(idx,status){
-  const el=document.getElementById(`qi-${idx}`);if(!el)return;
-  el.className=`queue-item ${status}`;
-  const s=el.querySelector('.queue-status');if(!s)return;
-  s.className=`queue-status ${status}`;
-  s.textContent=status==='processing'?'⚙ Processing…':status==='done'?'✓ Done':status==='error'?'✗ Error':'⏳ Pending';
-}
-function updateBtn(){const k=apiKeyEl.value.trim();convertBtn.disabled=!(imageFiles.length>0&&k.startsWith('AIza')&&k.length>20);}
-
-// Log
-function log(msg,type='info'){
-  logBox.classList.add('show');
-  const now=new Date(),ts=[now.getHours(),now.getMinutes(),now.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');
-  const line=document.createElement('div');line.className='log-line';
-  line.innerHTML=`<span class="log-ts">${ts}</span><span class="log-msg ${type}">${msg}</span>`;
-  logLines.appendChild(line);logLines.scrollTop=logLines.scrollHeight;
-}
-
-// Extract
-async function extractFromImage(item,model){
-  const apiKey=apiKeyEl.value.trim();
-  const prompt=`You are a data extraction specialist. Analyze this image.
-Find tabular data, spreadsheet, chart data, or structured dataset.
-Return ONLY a JSON object with this exact shape:
-{"title":"short dataset name","columns":["col1","col2"],"rows":[["val1","val2"]],"notes":"brief description"}
-Rules: infer column names if not visible; preserve numeric values as numbers not strings; return ONLY valid JSON, no markdown fences.`;
-  const resp=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({contents:[{parts:[{inline_data:{mime_type:item.file.type||'image/png',data:item.b64}},{text:prompt}]}],generationConfig:{responseMimeType:'application/json',temperature:0.1}})
-  });
-  if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error(e?.error?.message||resp.statusText);}
-  const data=await resp.json();
-  const text=data?.candidates?.[0]?.content?.parts?.[0]?.text||'';
-  if(!text)throw new Error('Empty response from Gemini');
-  return JSON.parse(text.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim());
-}
-
-// Build result card
-function buildResultCard(res,item){
-  const{extracted,parquetBytes,filename,error,idx}=res;
-  const card=document.createElement('div');card.className='result-card open';
-  if(error){
-    card.innerHTML=`<div class="result-card-header"><img class="result-img-thumb" src="${item.dataURL}"/><div style="flex:1"><div class="result-card-title">${item.file.name}</div><div class="result-card-meta">Extraction failed</div></div><span class="result-card-badge err">FAILED</span><span class="result-chevron">▶</span></div><div class="result-body"><div style="color:var(--red);font-size:12px">✗ ${error}</div></div>`;
-    card.querySelector('.result-card-header').addEventListener('click',()=>card.classList.toggle('open'));
-    return card;
-  }
-  const{columns,rows,title,notes}=extracted;
-  const isDouble=columns.map((_,ci)=>rows.every(r=>r[ci]==null||typeof r[ci]==='number'));
-  const numCols=isDouble.filter(Boolean).length,txtCols=columns.length-numCols;
-  const totalCells=columns.length*rows.length;
-  const nullCells=rows.reduce((a,row)=>a+row.filter(v=>v==null||v==='').length,0);
-  const comp=totalCells>0?(((totalCells-nullCells)/totalCells)*100).toFixed(1):'100.0';
-  const compColor=parseFloat(comp)>=95?'var(--green)':parseFloat(comp)>=80?'var(--yellow)':'var(--red)';
-
-  const colRows=columns.map((col,ci)=>{
-    const s=colStats(rows,ci,isDouble[ci]),type=isDouble[ci]?'number':'string';
-    return `<tr><td style="color:var(--muted)">${ci+1}</td><td style="font-weight:500;color:var(--text)">${col}</td><td><span class="type-badge ${type}">${type}</span></td><td>${s.unique.toLocaleString()}</td><td>${s.nulls}</td><td style="color:var(--muted2)">${s.min}</td><td style="color:var(--muted2)">${s.max}</td></tr>`;
-  }).join('');
-
-  const previewRows=rows.slice(0,15).map(row=>`<tr>${columns.map((_,i)=>`<td>${row[i]??''}</td>`).join('')}</tr>`).join('');
-  const moreNote=rows.length>15?`<tr><td colspan="${columns.length}" style="color:var(--muted);font-style:italic;padding:8px 14px">… ${rows.length-15} more rows — download to see all</td></tr>`:'';
-
-  card.innerHTML=`
-  <div class="result-card-header">
-    <img class="result-img-thumb" src="${item.dataURL}"/>
-    <div style="flex:1"><div class="result-card-title">${title||item.file.name}</div><div class="result-card-meta">${columns.length} columns &nbsp;·&nbsp; ${rows.length} rows &nbsp;·&nbsp; ${formatBytes(parquetBytes.byteLength)}</div></div>
-    <span class="result-card-badge ok">✓ READY</span>
-    <span class="result-chevron">▶</span>
-  </div>
-  <div class="result-body">
-    ${notes?`<div style="font-family:var(--sans);font-size:12px;color:var(--muted2);margin-bottom:18px;padding:10px 14px;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.15);border-radius:5px">📝 ${notes}</div>`:''}
-    <div class="stats-grid">
-      <div class="stat-box"><div class="stat-label">Rows</div><div class="stat-value">${rows.length.toLocaleString()}</div><div class="stat-unit">data records</div></div>
-      <div class="stat-box"><div class="stat-label">Columns</div><div class="stat-value">${columns.length}</div><div class="stat-unit">fields total</div></div>
-      <div class="stat-box"><div class="stat-label">Numeric</div><div class="stat-value">${numCols}</div><div class="stat-unit">DOUBLE type</div></div>
-      <div class="stat-box"><div class="stat-label">Text</div><div class="stat-value">${txtCols}</div><div class="stat-unit">STRING type</div></div>
-      <div class="stat-box"><div class="stat-label">Total Cells</div><div class="stat-value" style="font-size:16px">${totalCells.toLocaleString()}</div><div class="stat-unit">rows × cols</div></div>
-      <div class="stat-box"><div class="stat-label">Completeness</div><div class="stat-value" style="color:${compColor}">${comp}%</div><div class="stat-unit">non-null cells</div></div>
-      <div class="stat-box"><div class="stat-label">Parquet Size</div><div class="stat-value" style="font-size:16px;padding-top:2px">${formatBytes(parquetBytes.byteLength)}</div><div class="stat-unit">binary file</div></div>
-      <div class="stat-box"><div class="stat-label">Row Groups</div><div class="stat-value">1</div><div class="stat-unit">single partition</div></div>
-    </div>
-    <div class="sub-label">Column-by-Column Breakdown</div>
-    <div class="col-table-wrap">
-      <table class="col-table">
-        <thead><tr><th>#</th><th>Column Name</th><th>Parquet Type</th><th>Unique Values</th><th>Null Count</th><th>Min / First</th><th>Max / Last</th></tr></thead>
-        <tbody>${colRows}</tbody>
-      </table>
-    </div>
-    <div class="sub-label">Data Preview <span style="color:var(--muted2);text-transform:none;letter-spacing:0;font-size:10px">(first ${Math.min(15,rows.length)} of ${rows.length} rows)</span></div>
-    <div class="preview-table-wrap">
-      <table class="preview-table">
-        <thead><tr>${columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
-        <tbody>${previewRows}${moreNote}</tbody>
-      </table>
-    </div>
-    <button class="dl-btn" onclick="dlParquet(window._pq[${idx}],'${filename}')">⬇ &nbsp;Download ${filename}</button>
-  </div>`;
-  card.querySelector('.result-card-header').addEventListener('click',()=>card.classList.toggle('open'));
-  return card;
-}
-
-// Main pipeline
-convertBtn.addEventListener('click',async()=>{
-  convertBtn.disabled=true;convertBtn.innerHTML='<span class="spinner"></span> Processing…';
-  results=[];resultsContainer.innerHTML='';resultsSection.classList.remove('show');mergeCard.classList.remove('show');
-  logLines.innerHTML='';window._pq={};
-  try{
-    log('Pipeline started','accent');log(`Images in queue: ${imageFiles.length}`,'info');
-    log('Finding best free Flash model…','info');
-    cachedModel=await pickBestFreeModel(apiKeyEl.value.trim());
-    log(`✓ Model selected: ${cachedModel}`,'ok');
-    for(let i=0;i<imageFiles.length;i++){
-      const item=imageFiles[i];
-      log(`─── Image ${i+1}/${imageFiles.length}: ${item.file.name}`,'accent');
-      updateQueueItem(i,'processing');
-      try{
-        log(`  Sending to Gemini…`,'info');
-        const extracted=await extractFromImage(item,cachedModel);
-        log(`  ✓ "${extracted.title}" — ${extracted.columns.length} cols, ${extracted.rows.length} rows`,'ok');
-        if(extracted.notes)log(`  Note: ${extracted.notes}`,'warn');
-        log(`  Building Parquet binary…`,'info');
-        const parquetBytes=writeParquet(extracted.columns,extracted.rows);
-        const filename=(extracted.title||`output_${i+1}`).replace(/[^a-z0-9_\-]/gi,'_').toLowerCase()+'.parquet';
-        log(`  ✓ ${filename} (${formatBytes(parquetBytes.byteLength)})`,'ok');
-        results.push({idx:i,extracted,parquetBytes,filename,error:null});
-        window._pq[i]=parquetBytes;updateQueueItem(i,'done');
-      }catch(err){
-        log(`  ✗ Failed: ${err.message}`,'err');
-        results.push({idx:i,extracted:null,parquetBytes:null,filename:null,error:err.message});
-        updateQueueItem(i,'error');
-      }
-    }
-    resultsSection.classList.add('show');
-    results.forEach(res=>resultsContainer.appendChild(buildResultCard(res,imageFiles[res.idx])));
-    const ok=results.filter(r=>!r.error);
-    if(ok.length>=2){
-      const allCols=ok.map(r=>r.extracted.columns.join('|'));
-      const same=allCols.every(c=>c===allCols[0]);
-      mergeDesc.textContent=same
-        ?`All ${ok.length} tables share identical columns (${ok[0].extracted.columns.length} fields) — perfect for stacking into one file.`
-        :`${ok.length} tables extracted with different schemas. Merging will union all columns and fill gaps with empty values.`;
-      mergeCard.classList.add('show');
-    }
-    const total=ok.length;
-    log(`─────────────────────────`,'info');
-    log(`✓ Complete! ${total}/${imageFiles.length} file(s) ready.`,'ok');
-  }catch(err){log('✗ Fatal error: '+err.message,'err');}
-  finally{convertBtn.disabled=false;convertBtn.innerHTML='▶ &nbsp; Extract Data &amp; Generate Parquet Files';updateBtn();}
-});
-
-// Merge
-mergeBtn.addEventListener('click',()=>{
-  const ok=results.filter(r=>!r.error);if(ok.length<2)return;
-  const allCols=[];const seen=new Set();
-  ok.forEach(r=>r.extracted.columns.forEach(c=>{if(!seen.has(c)){seen.add(c);allCols.push(c);}}));
-  const mergedRows=[];
-  ok.forEach(r=>r.extracted.rows.forEach(row=>{mergedRows.push(allCols.map(col=>{const ci=r.extracted.columns.indexOf(col);return ci>=0?row[ci]:null;}));}));
-  const bytes=writeParquet(allCols,mergedRows);
-  dlParquet(bytes,'merged_output.parquet');
-  log(`Downloaded merged_output.parquet — ${mergedRows.length} rows, ${allCols.length} cols, ${formatBytes(bytes.byteLength)}`,'ok');
-});
-</script>
 </body>
 </html>
