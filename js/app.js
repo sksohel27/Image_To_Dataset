@@ -1,5 +1,9 @@
 /* ─────────────────────────────────────────────────────────────
    app.js — Main orchestrator: state, events, pipeline
+            • auto model-fallback on quota errors (10 models)
+            • progressive result rendering — successful images
+              are shown & downloadable the moment they complete,
+              even if later images fail
    ───────────────────────────────────────────────────────────── */
 
 // ── Global state ──────────────────────────────────────────────
@@ -141,42 +145,100 @@ function updateConvertBtn() {
   convertBtnEl.disabled = !(imageFiles.length > 0 && k.startsWith('AIza') && k.length > 20);
 }
 
+// ── Progressive result helpers ────────────────────────────────
+
+/**
+ * Appends (or replaces) a result card in the results container.
+ * Called immediately after each image finishes — success or error —
+ * so the user can download completed files without waiting for the run to end.
+ */
+function appendResultCard(res) {
+  const item = imageFiles[res.idx];
+  const card = buildResultCard(res, item);
+
+  // Replace placeholder if it already exists (e.g. re-run scenario)
+  const existing = document.getElementById(`result-card-${res.idx}`);
+  if (existing) {
+    existing.replaceWith(card);
+  } else {
+    resultsCont.appendChild(card);
+  }
+  card.id = `result-card-${res.idx}`;
+}
+
+/**
+ * Refreshes the merge card based on current successful results.
+ * Called after each image so the merge option appears as soon as
+ * 2+ images have succeeded.
+ */
+function refreshMergeCard() {
+  const ok = results.filter(r => !r.error);
+  if (ok.length >= 2) {
+    const allCols = ok.map(r => r.extracted.columns.join('|'));
+    const same    = allCols.every(c => c === allCols[0]);
+    mergeDescEl.textContent = same
+      ? `All ${ok.length} tables share identical columns (${ok[0].extracted.columns.length} fields) — ideal for stacking into one file.`
+      : `${ok.length} tables with different schemas. Merging will union all columns and fill gaps with empty values.`;
+    mergeCardEl.classList.add('show');
+  } else {
+    mergeCardEl.classList.remove('show');
+  }
+}
+
 // ── Main pipeline ─────────────────────────────────────────────
 
 convertBtnEl.addEventListener('click', async () => {
   convertBtnEl.disabled   = true;
   convertBtnEl.innerHTML  = '<span class="spinner"></span> Processing…';
   results = [];
+
+  // Show results section immediately — cards will stream in
   resultsCont.innerHTML = '';
-  resultsSection.classList.remove('show');
+  resultsSection.classList.add('show');
   mergeCardEl.classList.remove('show');
-  document.getElementById('logLines').innerHTML = '';
+  $('logLines').innerHTML = '';
   window._pq = {};
 
   const doImpute = imputeToggleEl.checked && !imputeToggleEl.disabled;
   const groqKey  = groqKeyEl.value.trim();
+  let   activeModel; // tracks the current working model across images
 
   try {
     log('Pipeline started', 'accent');
     log(`Queue: ${imageFiles.length} image(s)`, 'info');
     if (doImpute) log('⚡ Groq null imputation enabled (llama-3.3-70b-versatile)', 'groq');
 
-    // Pick best Gemini model
+    // ── Pick initial model ────────────────────────────────────
     log('Selecting best free Flash model…', 'info');
-    cachedModel = await pickBestFreeModel(apiKeyEl.value.trim());
-    log(`✓ Model: ${cachedModel}`, 'ok');
+    cachedModel  = await pickBestFreeModel(apiKeyEl.value.trim());
+    activeModel  = cachedModel;
+    log(`✓ Model: ${activeModel}`, 'ok');
+    log(`ℹ Fallback chain ready — ${FALLBACK_MODELS.length} free models on standby`, 'info');
 
-    // Process each image
+    // ── Process each image ────────────────────────────────────
     for (let i = 0; i < imageFiles.length; i++) {
       const item = imageFiles[i];
       log(`─── [${i + 1}/${imageFiles.length}] ${item.file.name}`, 'accent');
       updateQueueItem(i, 'processing');
 
       try {
-        // Step 1: Gemini extraction
-        log('  → Sending to Gemini…', 'info');
-        let extracted = await extractFromImage(item, cachedModel, apiKeyEl.value.trim());
-        log(`  ✓ "${extracted.title}" — ${extracted.columns.length} cols, ${extracted.rows.length} rows`, 'ok');
+        // Step 1 — Gemini extraction with automatic model fallback
+        log(`  → Sending to Gemini [${activeModel}]…`, 'info');
+
+        const { result: extracted, modelUsed } = await extractFromImageWithFallback(
+          item,
+          activeModel,
+          apiKeyEl.value.trim(),
+          (nextModel, attempt, total) => {
+            log(`  ⚠ Quota hit — switching to fallback model ${attempt}/${total}: ${nextModel}`, 'warn');
+            activeModel = nextModel; // persist for subsequent images
+          }
+        );
+
+        // If the model changed, update activeModel for subsequent images
+        if (modelUsed !== activeModel) activeModel = modelUsed;
+
+        log(`  ✓ "${extracted.title}" — ${extracted.columns.length} cols, ${extracted.rows.length} rows  [via ${modelUsed}]`, 'ok');
         if (extracted.notes) log(`  📝 ${extracted.notes}`, 'warn');
 
         // Count nulls before imputation
@@ -184,19 +246,24 @@ convertBtnEl.addEventListener('click', async () => {
           (a, row) => a + row.filter(v => v == null || v === '').length, 0
         );
 
-        let imputations = [];
+        let finalExtracted = extracted;
+        let imputations    = [];
 
-        // Step 2: Groq imputation (if enabled and nulls exist)
+        // Step 2 — Groq null imputation (if enabled and nulls exist)
         if (doImpute && nullCount > 0) {
           log(`  Found ${nullCount} null(s) → sending to Groq…`, 'groq');
           updateQueueItem(i, 'imputing');
           try {
-            const impResult = await imputeNullsWithGroq(extracted, groqKey);
-            extracted   = { ...extracted, rows: impResult.rows };
-            imputations = impResult.imputations;
+            const impResult  = await imputeNullsWithGroq(extracted, groqKey);
+            finalExtracted   = { ...extracted, rows: impResult.rows };
+            imputations      = impResult.imputations;
             log(`  ⚡ Groq filled ${imputations.length}/${nullCount} null(s)`, 'groq');
             imputations.forEach(imp => {
-              log(`    ✦ ${extracted.columns[imp.col]} [row ${imp.row + 1}]: "${imp.value}" (${imp.method}, ${imp.confidence})`, 'groq');
+              log(
+                `    ✦ ${extracted.columns[imp.col]} [row ${imp.row + 1}]: ` +
+                `"${imp.value}" (${imp.method}, ${imp.confidence})`,
+                'groq'
+              );
             });
           } catch (groqErr) {
             log(`  ⚠ Groq failed: ${groqErr.message} — continuing without imputation`, 'warn');
@@ -205,42 +272,79 @@ convertBtnEl.addEventListener('click', async () => {
           log('  No nulls found — skipping Groq step', 'info');
         }
 
-        // Step 3: Build Parquet
+        // Step 3 — Build Parquet
         log('  Building Parquet…', 'info');
-        const parquetBytes = writeParquet(extracted.columns, extracted.rows);
-        const filename     = safeName(extracted.title, `output_${i + 1}`);
-        log(`  ✓ ${filename} (${formatBytes(parquetBytes.byteLength)})`, 'ok');
+        const parquetBytes = writeParquet(finalExtracted.columns, finalExtracted.rows);
+        const filename     = safeName(finalExtracted.title, `output_${i + 1}`);
+        log(`  ✓ ${filename} (${formatBytes(parquetBytes.byteLength)}) — ready to download`, 'ok');
 
-        results.push({ idx: i, extracted, parquetBytes, filename, error: null, imputations, originalNullCount: nullCount });
+        const res = {
+          idx: i,
+          extracted: finalExtracted,
+          parquetBytes,
+          filename,
+          error: null,
+          imputations,
+          originalNullCount: nullCount,
+          modelUsed
+        };
+        results.push(res);
         window._pq[i] = parquetBytes;
         updateQueueItem(i, 'done');
 
+        // ── Render card immediately so the user can download now ──
+        appendResultCard(res);
+        refreshMergeCard();
+
       } catch (err) {
         log(`  ✗ ${err.message}`, 'err');
-        results.push({ idx: i, extracted: null, parquetBytes: null, filename: null, error: err.message, imputations: [], originalNullCount: 0 });
+
+        const res = {
+          idx: i,
+          extracted: null,
+          parquetBytes: null,
+          filename: null,
+          error: err.message,
+          imputations: [],
+          originalNullCount: 0
+        };
+        results.push(res);
         updateQueueItem(i, 'error');
+
+        // ── Still render the error card immediately ───────────────
+        appendResultCard(res);
+
+        // If it looks like quota is fully exhausted, warn and keep going
+        if (/quota exhausted on all/i.test(err.message)) {
+          log('  ⚠ All free models exhausted — remaining images will also fail. Try again later.', 'warn');
+        }
       }
     }
 
-    // Render result cards
-    resultsSection.classList.add('show');
-    results.forEach(res => resultsCont.appendChild(buildResultCard(res, imageFiles[res.idx])));
-
-    // Merge option (2+ successful results)
-    const ok = results.filter(r => !r.error);
-    if (ok.length >= 2) {
-      const allCols = ok.map(r => r.extracted.columns.join('|'));
-      const same    = allCols.every(c => c === allCols[0]);
-      mergeDescEl.textContent = same
-        ? `All ${ok.length} tables share identical columns (${ok[0].extracted.columns.length} fields) — ideal for stacking into one file.`
-        : `${ok.length} tables with different schemas. Merging will union all columns and fill gaps with empty values.`;
-      mergeCardEl.classList.add('show');
-    }
-
-    // Summary
+    // ── Final summary ─────────────────────────────────────────
+    const ok           = results.filter(r => !r.error);
     const totalImputed = results.reduce((a, r) => a + (r.imputations?.length || 0), 0);
     log('─'.repeat(32), 'info');
-    log(`✓ Done — ${ok.length}/${imageFiles.length} file(s) ready.${totalImputed > 0 ? ` ⚡ ${totalImputed} null(s) imputed.` : ''}`, 'ok');
+
+    if (ok.length === 0) {
+      log('✗ No files could be extracted. Check your API key or try again later.', 'err');
+    } else if (ok.length < imageFiles.length) {
+      log(
+        `⚠ Partial success — ${ok.length}/${imageFiles.length} file(s) ready. ` +
+        `${imageFiles.length - ok.length} failed (quota or error).` +
+        (totalImputed > 0 ? ` ⚡ ${totalImputed} null(s) imputed.` : ''),
+        'warn'
+      );
+      log(`↓ Download your ${ok.length} successful file(s) from the cards above.`, 'ok');
+    } else {
+      log(
+        `✓ All done — ${ok.length}/${imageFiles.length} file(s) ready.` +
+        (totalImputed > 0 ? ` ⚡ ${totalImputed} null(s) imputed.` : ''),
+        'ok'
+      );
+    }
+
+    refreshMergeCard();
 
   } catch (err) {
     log('✗ Fatal: ' + err.message, 'err');
@@ -272,5 +376,9 @@ document.getElementById('mergeBtn').addEventListener('click', () => {
 
   const bytes = writeParquet(allCols, mergedRows);
   dlParquet(bytes, 'merged_output.parquet');
-  log(`↓ merged_output.parquet — ${mergedRows.length} rows, ${allCols.length} cols, ${formatBytes(bytes.byteLength)}`, 'ok');
+  log(
+    `↓ merged_output.parquet — ${mergedRows.length} rows, ` +
+    `${allCols.length} cols, ${formatBytes(bytes.byteLength)}`,
+    'ok'
+  );
 });
