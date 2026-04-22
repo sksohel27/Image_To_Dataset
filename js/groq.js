@@ -90,10 +90,98 @@ function parseGroqResponse(text) {
   throw new Error('Could not parse Groq response (all recovery attempts failed)');
 }
 
+// ── JS-side column statistics (sent as reference, not computed by LLM) ───
+
+/**
+ * Pre-computes per-column stats entirely in JS so the LLM
+ * receives them as a reference range rather than guessing.
+ * This prevents the model from defaulting to "median for everything".
+ */
+function computeColStats(columns, rows) {
+  return columns.map((col, ci) => {
+    const vals = rows
+      .map(r => r[ci])
+      .filter(v => v !== null && v !== undefined && v !== '');
+
+    const nums = vals.filter(v => typeof v === 'number');
+
+    if (nums.length > 0) {
+      const sorted = [...nums].sort((a, b) => a - b);
+      const mid    = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+      const mean   = nums.reduce((a, b) => a + b, 0) / nums.length;
+      // Standard deviation — measures spread, useful to detect outliers
+      const std    = Math.sqrt(
+        nums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / nums.length
+      );
+      return {
+        col, type: 'numeric',
+        count: nums.length,
+        mean:   +mean.toFixed(4),
+        median: +median.toFixed(4),
+        std:    +std.toFixed(4),
+        min:    Math.min(...nums),
+        max:    Math.max(...nums),
+        // A sample of actual values to show real distribution shape
+        sample: [...new Set(sorted)].slice(0, 8)
+      };
+    }
+
+    // Categorical
+    const freq = {};
+    vals.forEach(v => { const k = String(v); freq[k] = (freq[k] || 0) + 1; });
+    const topValues = Object.entries(freq)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([value, count]) => ({ value, count }));
+    return {
+      col, type: 'categorical',
+      count: vals.length,
+      mode: topValues[0]?.value ?? null,
+      topValues
+    };
+  });
+}
+
+/**
+ * Builds per-null row-context objects so the LLM sees every
+ * neighbouring value in the same row alongside each missing cell.
+ */
+function buildNullContexts(columns, rows, nullBatch) {
+  return nullBatch.map(({ row: ri, col: ci, colName }) => {
+    const rowData = {};
+    columns.forEach((col, idx) => {
+      if (idx === ci) return; // skip the target cell itself
+      const v = rows[ri][idx];
+      if (v !== null && v !== undefined && v !== '') {
+        rowData[col] = v;
+      }
+    });
+
+    // Also include 2 rows above and below for sequence/trend detection
+    const nearby = [];
+    for (let d = -2; d <= 2; d++) {
+      if (d === 0) continue;
+      const r = ri + d;
+      if (r < 0 || r >= rows.length) continue;
+      const v = rows[r][ci];
+      if (v !== null && v !== undefined && v !== '') {
+        nearby.push({ offset: d, value: v });
+      }
+    }
+
+    return { row: ri, col: ci, column_name: colName, row_context: rowData, nearby_same_col: nearby };
+  });
+}
+
 // ── Single Groq API call ──────────────────────────────────────
 
 /**
  * Sends one batch of null locations to Groq for imputation.
+ * Passes pre-computed JS column stats + per-cell row context
+ * so the model cannot default to "column median for everything".
  *
  * @param {string[]} columns
  * @param {Array[]}  rows        — full dataset rows (for context)
@@ -103,37 +191,61 @@ function parseGroqResponse(text) {
  * @returns {Promise<Object[]>}  — imputation objects
  */
 async function callGroq(columns, rows, nullBatch, title, groqKey) {
-  // Compact data preview (max 50 rows, nulls marked)
-  const previewRows = rows.slice(0, 50).map((row, ri) =>
-    row.map((v, ci) =>
-      (v === null || v === undefined || v === '') ? `NULL[r${ri}c${ci}]` : v
-    )
-  );
+  const colStats    = computeColStats(columns, rows);
+  const nullDetails = buildNullContexts(columns, rows, nullBatch);
 
-  const prompt = `You are a data scientist specializing in missing value imputation.
+  const prompt = `You are an expert data scientist performing contextual missing value imputation.
 
 Dataset: "${title || 'unknown'}"
 Columns: ${JSON.stringify(columns)}
-Data (up to 50 rows, NULLs marked as NULL[rROWcCOL]):
-${JSON.stringify(previewRows)}
 
-Fill ONLY these ${nullBatch.length} missing value(s):
-${JSON.stringify(nullBatch.map(l => ({ row: l.row, col: l.col, column_name: l.colName })))}
+────────────────────────────────────────────────
+COLUMN STATISTICS (pre-computed — use as reference range only):
+${JSON.stringify(colStats, null, 2)}
+────────────────────────────────────────────────
 
-Imputation strategies (choose best per cell):
-1. NUMERIC → median of column, or linear interpolation if sequential, or regression if correlated
-2. CATEGORICAL/TEXT → mode (most frequent), or infer from sibling columns in the same row
-3. DATE/TIME → detect interval pattern (monthly, weekly, annual) and fill accordingly
-4. Use column name semantics for realistic values
-5. Use cross-column inference when multiple columns are populated in the same row
+CELLS TO IMPUTE — each entry includes:
+  • row_context: all OTHER non-null values in the same row
+  • nearby_same_col: non-null values from adjacent rows in the same column (for trend/sequence)
+${JSON.stringify(nullDetails, null, 2)}
 
-Return ONLY a raw JSON object — absolutely no markdown, no backticks, no explanation:
-{"imputations":[{"row":0,"col":1,"value":"filled_value","method":"median|mode|interpolation|correlation|pattern|inference|domain","confidence":"high|medium|low","reason":"one sentence"}]}
+════════════════════════════════════════════════
+IMPUTATION RULES — follow in strict priority order:
+════════════════════════════════════════════════
 
-Critical:
-- Numeric columns → numeric values (JS numbers, not quoted strings)
-- Match existing precision/format in the same column
-- No placeholder text — be realistic and domain-appropriate
+RULE 1 ▸ ROW-CONTEXT INFERENCE (use this first, always):
+  Examine every value in row_context. Use domain logic and column relationships
+  to derive a realistic value. Example: if pH is 7.2 in a water quality row and
+  you need to fill "Hardness", check what hardness looks like in rows with similar pH.
+  This is the PRIMARY strategy. Most values can be filled this way.
+
+RULE 2 ▸ SEQUENCE / TREND (use when nearby_same_col shows a pattern):
+  If nearby rows in the same column form an arithmetic sequence, geometric sequence,
+  or trend, interpolate/extrapolate. Do NOT use this if the nearby values are scattered.
+
+RULE 3 ▸ CORRELATION (use when two columns are numerically related):
+  If the column stats show another numeric column has a tight range and the row_context
+  contains that column's value, derive the missing value from that relationship.
+
+RULE 4 ▸ DOMAIN KNOWLEDGE (use when column name implies a known constraint):
+  e.g. "Arsenic (mg/L)" in drinking water is typically 0.001–0.05. Use domain priors.
+  Apply only when row context and sequence give no useful signal.
+
+RULE 5 ▸ COLUMN STATISTICS (absolute last resort only):
+  Use mean/median ONLY when rules 1–4 all fail AND you have genuinely no other signal.
+  ⚠ FORBIDDEN: do NOT assign the same median/mean value to every null in a column.
+  ⚠ FORBIDDEN: if multiple rows are missing the same column, each must get a DIFFERENT
+    value derived individually from its own row context. Identical values across rows
+    are only acceptable if the data is genuinely uniform (e.g., a constant flag column).
+
+════════════════════════════════════════════════
+
+Return ONLY a raw JSON object — no markdown, no backticks, no explanation text:
+{"imputations":[{"row":0,"col":1,"value":"filled_value","method":"row_context|sequence|correlation|domain|statistics","confidence":"high|medium|low","reason":"one sentence explaining which row values led to this estimate"}]}
+
+Hard constraints:
+- Numeric columns → JS numbers (not quoted strings), match column precision
+- Each imputed value must be individually justified by its own row_context
 - Output ONLY the JSON object, nothing before or after it`;
 
   const resp = await fetch(GROQ_API, {
@@ -145,7 +257,7 @@ Critical:
     body: JSON.stringify({
       model:       GROQ_MODEL,
       messages:    [{ role: 'user', content: prompt }],
-      temperature: 0.1,
+      temperature: 0.2,   // slight raise from 0.1 — allows realistic variation between rows
       max_tokens:  GROQ_MAX_TOK
     })
   });
